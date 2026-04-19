@@ -111,67 +111,28 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
             self.send_error_json("Endpoint not found", 404)
 
     def _handle_detect(self):
-        try:
-            content_type = self.headers.get("Content-Type", "")
+    try:
+        # read raw data
+        length = int(self.headers.get("Content-Length", 0))
+        file_data = self.rfile.read(length)
 
-            # — multipart/form-data upload ————————————————————————————————————
-           length = int(self.headers.get("Content-Length", 0))
-file_data = self.rfile.read(length)
+        filename = self.headers.get("X-Filename", "document.jpg")
 
-filename = self.headers.get("X-Filename", "document.jpg")
-                if "file" not in fs:
-                    self.send_error_json("No 'file' field in request.")
-                    return
-                item      = fs["file"]
-                filename  = item.filename or "document.jpg"
-                file_data = item.file.read()
+        # save to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
 
-            # — raw binary upload ─────────────────────────────────────────────
-            elif "image/" in content_type or "application/octet-stream" in content_type:
-                length    = int(self.headers.get("Content-Length", 0))
-                file_data = self.rfile.read(length)
-                filename  = self.headers.get("X-Filename", "document.jpg")
+        # run AI detection
+        report = detector.detect(tmp_path)
+        result = report_to_dict(report)
 
-            else:
-                self.send_error_json(
-                    "Send multipart/form-data with a 'file' field, "
-                    "or raw bytes with an image/* Content-Type."
-                )
-                return
+        # send response
+        self.send_json(result)
 
-            ext = Path(filename).suffix.lower()
-            if ext not in SUPPORTED_EXTS:
-                self.send_error_json(
-                    f"Unsupported file type '{ext}'. "
-                    f"Supported: {', '.join(sorted(SUPPORTED_EXTS))}"
-                )
-                return
-
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                tmp.write(file_data)
-                tmp_path = tmp.name
-
-            try:
-                t0     = time.time()
-                print(f"\nAnalysing: {filename}")
-                report = detector.detect(tmp_path)
-                elapsed = time.time() - t0
-
-                result = report_to_dict(report)
-                result["processing_time_sec"] = round(elapsed, 2)
-                result["report_id"]           = str(uuid.uuid4())
-                REPORTS[result["report_id"]]  = result
-
-                print(f"  Done in {elapsed:.1f}s — verdict: {report.verdict} "
-                      f"(score={report.overall_score:.3f})")
-                self.send_json(result)
-
-            finally:
-                os.unlink(tmp_path)
-
-        except Exception as e:
-            traceback.print_exc()
-            self.send_error_json(f"Detection failed: {e}", 500)
+    except Exception as e:
+        self.send_error_json(f"Detection failed: {e}", 500)
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):
