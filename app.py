@@ -15,7 +15,6 @@ import time
 import traceback
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import cgi
 import io
 import os
 import tempfile
@@ -116,16 +115,10 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
             content_type = self.headers.get("Content-Type", "")
 
             # — multipart/form-data upload ————————————————————————————————————
-            if "multipart/form-data" in content_type:
-                length = int(self.headers.get("Content-Length", 0))
-                body   = self.rfile.read(length)
-                fs     = cgi.FieldStorage(
-                    fp=io.BytesIO(body),
-                    environ={"REQUEST_METHOD": "POST",
-                             "CONTENT_TYPE":   content_type,
-                             "CONTENT_LENGTH": str(length)},
-                    keep_blank_values=True
-                )
+           length = int(self.headers.get("Content-Length", 0))
+file_data = self.rfile.read(length)
+
+filename = self.headers.get("X-Filename", "document.jpg")
                 if "file" not in fs:
                     self.send_error_json("No 'file' field in request.")
                     return
