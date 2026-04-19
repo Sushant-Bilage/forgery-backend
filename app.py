@@ -1,12 +1,5 @@
 """
 Document Forgery Detection — REST API Backend
-================================================
-Run with:  python app.py
-Endpoints:
-  POST /detect          — upload a document image for analysis
-  GET  /health          — health check
-  GET  /methods         — list detection methods and weights
-  GET  /report/{id}     — retrieve a cached report by ID
 """
 
 import json
@@ -15,17 +8,16 @@ import time
 import traceback
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import io
 import os
 import tempfile
 
 from detector import DocumentForgeryDetector, report_to_dict
 
-REPORTS:  dict = {}
+REPORTS: dict = {}
 detector = DocumentForgeryDetector()
 
 CORS_HEADERS = {
-    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Content-Type": "application/json",
@@ -39,10 +31,10 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[{self.address_string()}] {fmt % args}")
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # ───────── helpers ─────────
 
     def send_json(self, data: dict, status: int = 200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(data).encode("utf-8")
         self.send_response(status)
         for k, v in CORS_HEADERS.items():
             self.send_header(k, v)
@@ -53,7 +45,7 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
     def send_error_json(self, message: str, status: int = 400):
         self.send_json({"error": message, "status": status}, status)
 
-    # ── CORS pre-flight ───────────────────────────────────────────────────────
+    # ───────── CORS ─────────
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -61,17 +53,15 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
-    # ── GET ───────────────────────────────────────────────────────────────────
+    # ───────── GET ─────────
 
     def do_GET(self):
         path = self.path.split("?")[0]
 
         if path == "/health":
             self.send_json({
-                "status":         "ok",
-                "service":        "Document Forgery Detection API",
-                "version":        "2.0.0",
-                "cached_reports": len(REPORTS)
+                "status": "ok",
+                "service": "Forgery Detection API"
             })
 
         elif path.startswith("/report/"):
@@ -79,80 +69,58 @@ class ForgeryAPIHandler(BaseHTTPRequestHandler):
             if rid in REPORTS:
                 self.send_json(REPORTS[rid])
             else:
-                self.send_error_json(f"Report '{rid}' not found", 404)
-
-        elif path == "/methods":
-            self.send_json({"methods": [
-                {"id": "ela",              "name": "Error Level Analysis",
-                 "weight": 0.25, "description": "Detects editing artifacts via re-compression analysis"},
-                {"id": "noise_analysis",   "name": "Noise Pattern Analysis",
-                 "weight": 0.20, "description": "Detects spliced regions via inconsistent noise floors"},
-                {"id": "font_consistency", "name": "Font Consistency Analysis",
-                 "weight": 0.15, "description": "Detects text insertion via font metric inconsistencies"},
-                {"id": "copy_move",        "name": "Copy-Move Detection",
-                 "weight": 0.15, "description": "Detects cloned regions using keypoint self-matching"},
-                {"id": "layout_anomaly",   "name": "Layout Anomaly Detection",
-                 "weight": 0.10, "description": "Detects irregular margins and spacing from text insertion"},
-                {"id": "metadata",         "name": "Metadata Forensics",
-                 "weight": 0.08, "description": "Detects file-level tampering signals"},
-                {"id": "ocr_confidence",   "name": "OCR Confidence Analysis",
-                 "weight": 0.07, "description": "Low OCR confidence indicates degraded or tampered text"},
-            ]})
+                self.send_error_json("Report not found", 404)
 
         else:
             self.send_error_json("Endpoint not found", 404)
 
-    # ── POST ──────────────────────────────────────────────────────────────────
+    # ───────── POST ─────────
 
     def do_POST(self):
-        if self.path.split("?")[0] == "/detect":
+        if self.path == "/detect":
             self._handle_detect()
         else:
             self.send_error_json("Endpoint not found", 404)
 
+    # ───────── DETECT ─────────
+
     def _handle_detect(self):
-    try:
-        # read raw data
-        length = int(self.headers.get("Content-Length", 0))
-        file_data = self.rfile.read(length)
+        try:
+            # read raw image data
+            length = int(self.headers.get("Content-Length", 0))
+            file_data = self.rfile.read(length)
 
-        filename = self.headers.get("X-Filename", "document.jpg")
+            filename = self.headers.get("X-Filename", "document.jpg")
 
-        # save to temp file
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(file_data)
-            tmp_path = tmp.name
+            # save temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(file_data)
+                tmp_path = tmp.name
 
-        # run AI detection
-        report = detector.detect(tmp_path)
-        result = report_to_dict(report)
+            # run detection
+            report = detector.detect(tmp_path)
+            result = report_to_dict(report)
 
-        # send response
-        self.send_json(result)
+            # store report
+            report_id = str(uuid.uuid4())
+            REPORTS[report_id] = result
+            result["report_id"] = report_id
 
-    except Exception as e:
-        self.send_error_json(f"Detection failed: {e}", 500)
+            # send response
+            self.send_json(result)
+
+        except Exception as e:
+            traceback.print_exc()
+            self.send_error_json(f"Detection failed: {e}", 500)
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000):
+# ───────── RUN SERVER ─────────
+
+def run_server(host="0.0.0.0", port=8000):
     server = HTTPServer((host, port), ForgeryAPIHandler)
-    print(f"""
-╔══════════════════════════════════════════════════╗
-║  Document Forgery Detection API  v2.0            ║
-║  Running on http://{host}:{port}              ║
-╠══════════════════════════════════════════════════╣
-║  POST /detect        analyse a document          ║
-║  GET  /health        health check                ║
-║  GET  /methods       list detection methods      ║
-║  GET  /report/{{id}}  get cached report           ║
-╚══════════════════════════════════════════════════╝
-    """)
+    print(f"Server running on http://{host}:{port}")
     server.serve_forever()
 
-
-if __name__ == "__main__":
-   import os
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
